@@ -1,0 +1,9 @@
+include *.py
+exclude mdcheck.py run_x.py
+recursive-include template *.*
+recursive-include pki ssl.*
+recursive-include attributemaps *.py
+recursive-include attributemaps *.pyc
+recursive-include template *
+recursive-exclude template modules_python
+recursive-include etc *_config.py metadata.xml pysaml_config.py
