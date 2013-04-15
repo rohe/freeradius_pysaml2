@@ -11,12 +11,10 @@ import radiusd
 import saml2
 import sys
 import traceback
-import logging
 
 from saml2 import saml
 
 from saml2.client import Saml2Client
-from saml2.s_utils import sid
 from saml2.response import authn_response
 from saml2.ecp_client import Client
 
@@ -126,7 +124,6 @@ def authentication_request(cls, ecp, idp_entity_id, destination, sign=False):
     :return: A Authentication Response
     """
 
-    session_id = sid()
     acsus = cls.config.endpoint('assertion_consumer_service',
                                 saml2.BINDING_PAOS)
     if not acsus:
@@ -135,7 +132,6 @@ def authentication_request(cls, ecp, idp_entity_id, destination, sign=False):
     acsu = acsus[0]
 
     request = cls.create_authn_request(destination,
-                                "",
                                 service_url_binding=acsu,
                                 sign=sign,
                                 binding=saml2.BINDING_PAOS,
@@ -164,7 +160,7 @@ def authentication_request(cls, ecp, idp_entity_id, destination, sign=False):
                                    allow_unsolicited=True)
             #aresp.debug = True
         except Exception, exc:
-            logger.error("%s", (exc,))
+            logger.error("%s" % exc)
             return None
 
         try:
@@ -230,7 +226,8 @@ def post_auth(authData):
     log(radiusd.L_DBG, "Working on behalf of: %s" % _srv)
 
     # Find the endpoint to use
-    sso_service =CLIENT.metadata.single_sign_on_service(config.IDP_ENTITYID,saml2.BINDING_SOAP)
+    sso_service = CLIENT.metadata.single_sign_on_service(config.IDP_ENTITYID,
+                                                         saml2.BINDING_SOAP)
     if not sso_service:
         log(radiusd.L_DBG,
             "Couldn't find an single-sign-on endpoint for: %s" % (
