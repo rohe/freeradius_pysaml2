@@ -153,7 +153,7 @@ def authentication_request(cls, ecp, idp_entity_id, destination, sign=False):
         response = ecp.phase2(request, acsu, idp_entity_id, headers,
                               sign)
     except Exception, exc:
-        exception_trace("soap", exc, log)
+        exception_trace("soap", exc, logger)
         logger.info("SoapClient exception: %s" % (exc,))
         return None
 
