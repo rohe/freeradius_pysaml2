@@ -31,7 +31,6 @@ import config
 CLIENT = None
 ECP = None
 MAX_STRING_LENGTH = 247
-logger = logging.getLogger(__name__)
 
 def eq_len_parts(txt, delta=250):
     res = []
@@ -67,6 +66,8 @@ class LOG(object):
     def warning(self, txt):
         log(radiusd.L_ERR, txt) # Not absolutely correct just an approximation
 
+logger = LOG()
+
 #noinspection PyUnusedLocal
 def instantiate(p):
     """Module Instantiation.  0 for success, -1 for failure.
@@ -100,9 +101,9 @@ def instantiate(p):
             _certs = ""
             _disable = True
 
-        ECP = Client("", _passwd, None, metadata_file=config.METADATA_FILE,
+        ECP = Client("", _passwd, None, metadata_file=config.METADATA_FILE,xmlsec_binary=CLIENT.config.xmlsec_binary,
                      ca_certs=_certs,
-                     disable_ssl_certificate_validation=_disable)
+                     disable_ssl_certificate_validation=_disable, key_file=CLIENT.config.key_file)
         logger.info('ECP client initialized')
         
     except Exception, err:
@@ -125,8 +126,6 @@ def authentication_request(cls, ecp, idp_entity_id, destination, sign=False):
     :return: A Authentication Response
     """
 
-    logger = cls.logger
-
     session_id = sid()
     acsus = cls.config.endpoint('assertion_consumer_service',
                                 saml2.BINDING_PAOS)
@@ -135,31 +134,26 @@ def authentication_request(cls, ecp, idp_entity_id, destination, sign=False):
         
     acsu = acsus[0]
 
-    spentityid = cls.config.entityid
-
-    # create the request
-    request = cls.authn_request(session_id,
-                                destination,
-                                acsu,
-                                spentityid,
+    request = cls.create_authn_request(destination,
                                 "",
+                                service_url_binding=acsu,
                                 sign=sign,
                                 binding=saml2.BINDING_PAOS,
                                 nameid_format=saml.NAMEID_FORMAT_PERSISTENT)
 
     try:
         try:
-            headers = {config.USERNAME_HEADER: ecp.user}
+            headers = [(config.USERNAME_HEADER, ecp.user)]
         except AttributeError:
             headers = None
 
         logger.info( "Headers: {0:>s}".format(headers))
-            
+
         # send the request and receive the response
         response = ecp.phase2(request, acsu, idp_entity_id, headers,
-                              destination)
+                              sign)
     except Exception, exc:
-        exception_trace("soap", exc, logger)
+        exception_trace("soap", exc, log)
         logger.info("SoapClient exception: %s" % (exc,))
         return None
 
@@ -236,15 +230,14 @@ def post_auth(authData):
     log(radiusd.L_DBG, "Working on behalf of: %s" % _srv)
 
     # Find the endpoint to use
-    sso_service = CLIENT.config.single_sign_on_services(config.IDP_ENTITYID,
-                                                        saml2.BINDING_SOAP)
+    sso_service =CLIENT.metadata.single_sign_on_service(config.IDP_ENTITYID,saml2.BINDING_SOAP)
     if not sso_service:
         log(radiusd.L_DBG,
             "Couldn't find an single-sign-on endpoint for: %s" % (
                 config.IDP_ENTITYID,))
         return radiusd.RLM_MODULE_FAIL
 
-    location = sso_service[0]
+    location = sso_service[0]["location"]
 
     if config.DEBUG:
         log(radiusd.L_DBG, "location: %s" % location)
@@ -293,5 +286,5 @@ def post_auth(authData):
 if __name__ == '__main__':
     instantiate(None)
     #    print authorize((('User-Name', '"map"'), ('User-Password', '"abc"')))
-    print post_auth((('User-Name', '"roland"'), ('User-Password', '"one"')))
+    print post_auth((('User-Name', '"testing"'), ('User-Password', '"password"')))
   
