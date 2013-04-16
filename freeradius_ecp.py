@@ -134,6 +134,7 @@ def authentication_request(cls, ecp, idp_entity_id, destination, sign=False):
     request = cls.create_authn_request(destination,
                                 service_url_binding=acsu,
                                 sign=sign,
+                                sign_prepare=True,
                                 binding=saml2.BINDING_PAOS,
                                 nameid_format=saml.NAMEID_FORMAT_PERSISTENT)
 
