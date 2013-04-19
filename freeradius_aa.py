@@ -3,43 +3,44 @@
 # Copyright 2011 Roland Hedberg <roland.hedberg@adm.umu.se>
 #
 # $Id$
+from saml2 import BINDING_SOAP
 
 __author__ = 'rolandh'
 
 import radiusd
 import sys
 import traceback
-from saml2 import soap
 from saml2.client import Saml2Client
 from saml2.s_utils import sid
 from saml2.response import attribute_response
-from saml2.sigver import pre_signature_part
 
 # Where's the configuration
-CONFIG_DIR = "/usr/local/etc/moonshot"
-sys.path.insert(0, CONFIG_DIR)
+#CONFIG_DIR = "/usr/local/etc/moonshot"
+#sys.path.insert(0, CONFIG_DIR)
 
 import config
 
 # Globals
 CLIENT = None
-HTTP = None
 MAX_STRING_LENGTH = 247
 
-def eq_len_parts(str, delta=250):
+
+def eq_len_parts(txt, delta=250):
     res = []
     n = 0
-    strlen = len(str)
+    strlen = len(txt)
     while n <= strlen:
         m = n + delta
-        res.append("".join(str[n:m]))
+        res.append("".join(txt[n:m]))
         n = m
     return res
+
 
 def exception_trace(tag, exc, log):
     message = traceback.format_exception(*sys.exc_info())
     log.error("[%s] ExcList: %s" % (tag, "".join(message),))
     log.error("[%s] Exception: %s" % (tag, exc))
+
 
 def log(level, s):
     """Log function."""
@@ -57,7 +58,8 @@ class LOG(object):
         log(radiusd.L_DBG, txt)
 
     def warning(self, txt):
-        log(radiusd.L_ERR, txt) # Not absolutely correct just an approximation
+        log(radiusd.L_ERR, txt)  # Not absolutely correct just an approximation
+
 
 #noinspection PyUnusedLocal
 def instantiate(p):
@@ -65,120 +67,84 @@ def instantiate(p):
     p is a dummy variable here.
     """
     global CLIENT
-    global HTTP
 
+    log = LOG()
     try:
-        CLIENT = Saml2Client(debug=config.DEBUG,
-                             identity_cache=config.IDENTITY_CACHE,
+        CLIENT = Saml2Client(identity_cache=config.IDENTITY_CACHE,
                              state_cache=config.STATE_CACHE,
                              config_file=config.CONFIG)
-        if not CLIENT.logger:
-            CLIENT.logger = LOG()
-        _log = CLIENT.logger
     except Exception, err:
         # Report the error and return -1 for failure.
         # xxx A more advanced module would retry the database.
         exception_trace("instantiate SAML2Client", err, LOG())
         return -1
 
-    try:
-        _certs = CLIENT.config.ca_certs
-        if _certs:
-            _disable = False
-        else:
-            _disable = True
-    except (KeyError, AttributeError):
-        _certs = ""
-        _disable = True
-
-    log(radiusd.L_INFO, 'SAML Client initialized')
-    try:
-        HTTP = soap.SOAPClient("", # No default URL
-                               log=_log,
-                               ca_certs=_certs,
-                               disable_ssl_certificate_validation=_disable)
-    except Exception, err:
-        exception_trace("instantiate SOAPClient", err, _log)
-        return -1
-
-    log(radiusd.L_INFO, 'SP initialized')
+    log.info('SAML Client initialized')
+    log.info('SP initialized')
 
     return 0
 
 
-def attribute_query(cls, subject_id, destination, issuer_id=None,
-                    attribute=None, sp_name_qualifier=None, name_qualifier=None,
-                    nameid_format=None, log=None, sign=False):
+def attribute_query(cls, subject_id, destination, attribute=None, name_id=None,
+                    sp_name_qualifier=None, name_qualifier=None,
+                    nameid_format=None, sign=False):
     """ Does a attribute request to an attribute authority, this is
     by default done over SOAP. Other bindings could be used but are not
     supported right now.
 
     :param subject_id: The identifier of the subject
     :param destination: To whom the query should be sent
-    :param issuer_id: Who is sending this query
     :param attribute: A dictionary of attributes and values that is asked for
+    :param name_id: A NameID instance that describes the entity the information
+        is asked for.
     :param sp_name_qualifier: The unique identifier of the
         service provider or affiliation of providers for whom the
         identifier was generated.
     :param name_qualifier: The unique identifier of the identity
         provider that generated the identifier.
     :param nameid_format: The format of the name ID
-    :param log: Function to use for logging
     :param sign: Whether the request should be signed or not
     :return: The Assertion
     """
 
-    if log is None:
-        log = cls.logger
+    global CLIENT
 
+    logger = LOG()
     session_id = sid()
-    issuer = cls.issuer(issuer_id)
 
-    if not name_qualifier and not sp_name_qualifier:
-        sp_name_qualifier = cls.config.entityid
-
-    request = cls.create_attribute_query(session_id, subject_id,
-                                         destination, issuer, attribute,
-                                         sp_name_qualifier,
-                                         name_qualifier,
-                                         nameid_format=nameid_format)
-
-    #    soapclient = HTTP.send(destination, cls.config.key_file,
-    #                           cls.config.cert_file)
+    if not name_id:
+        args = {
+            "subject_id": subject_id,
+            "sp_name_qualifier": sp_name_qualifier,
+            "format": nameid_format,
+            "name_qualifier": name_qualifier
+        }
+        if not name_qualifier and not sp_name_qualifier:
+            args["sp_name_qualifier"] = cls.config.entityid
+    else:
+        args = {"name_id": name_id}
 
     if sign:
-        request.signature= pre_signature_part(request.id, cls.sec.my_cert, 1)
+        args["sign_prepare"] = True
+
+    request = cls.create_attribute_query(destination,
+                                         attribute=attribute,
+                                         message_id=session_id,
+                                         **args)
 
     try:
-        if sign:
-            response = HTTP.send(request, path=destination, sign=True,
-                                 sec=cls.sec)
-        else:
-            response = HTTP.send(request, path=destination)
+        args = CLIENT.use_soap(request, destination, sign=sign)
+        response = CLIENT.send(**args)
     except Exception, exc:
-        exception_trace("SoapClient exception", exc, log)
+        exception_trace("SoapClient exception", exc, logger)
         return None
 
     if response:
         try:
-            # synchronous operation
-            return_addr = cls.config.endpoint('assertion_consumer_service')[0]
-            aresp = attribute_response(cls.config, return_addr, log=log)
-            aresp.allow_unsolicited = True
-            aresp.asynchop = False
-            #aresp.debug = True
+            _resp = CLIENT.parse_attribute_query_response(response.text,
+                                                          BINDING_SOAP)
         except Exception, exc:
-            exception_trace("response error", exc, log)
-            return None
-
-        try:
-            _resp = aresp.loads(response, False, HTTP.response).verify()
-        except Exception, exc:
-            exception_trace("response parsing error", exc, log)
-            return None
-        if _resp is None:
-            if log:
-                log.error("Didn't like the response")
+            exception_trace("response error", exc, logger)
             return None
 
         return _resp.assertion
@@ -214,7 +180,7 @@ def post_auth(authData):
     """
 
     global CLIENT
-    global HTTP
+    logger = LOG()
 
     # Extract the data we need.
     userName = None
@@ -231,38 +197,26 @@ def post_auth(authData):
             hostName = t[1][1:-1]
 
     _srv = "%s:%s" % (serviceName, hostName)
-    log(radiusd.L_DBG, "Working on behalf of: %s" % _srv)
-
+    logger.debug("Working on behalf of: %s" % _srv)
 
     # Find the endpoint to use
-    location = CLIENT.config.attribute_services(
-        config.ATTRIBUTE_AUTHORITY)[0].location
-    log(radiusd.L_DBG, "location: %s" % location)
+    _binding, location = CLIENT.pick_binding(
+        "attribute_service", [BINDING_SOAP], "attribute_authority",
+        entity_id=config.ATTRIBUTE_AUTHORITY)
+
+    logger.debug("location: %s" % location)
 
     # Build and send the attribute query
-    sp_name_qualifier = config.SP_NAME_QUALIFIER
-    name_qualifier = config.NAME_QUALIFIER
-    nameid_format = config.NAMEID_FORMAT
-
-    log(radiusd.L_DBG, "SP_NAME_QUALIFIER: %s" % sp_name_qualifier)
-    log(radiusd.L_DBG, "NAME_QUALIFIER: %s" % name_qualifier)
-    log(radiusd.L_DBG, "NAMEID_FORMAT: %s" % nameid_format)
-
-    _attribute_assertion = attribute_query(CLIENT,
-                                           userName,
-                                           location,
-                                           sp_name_qualifier=sp_name_qualifier,
-                                           name_qualifier=name_qualifier,
-                                           nameid_format=nameid_format,
-                                           issuer_id=CLIENT.issuer(),
-                                           log=LOG(),
-                                           sign=config.SIGN)
+    _attribute_assertion = attribute_query(
+        CLIENT, userName, location, sp_name_qualifier=config.SP_NAME_QUALIFIER,
+        name_qualifier=config.NAME_QUALIFIER,
+        nameid_format=config.NAMEID_FORMAT, sign=config.SIGN)
 
     if _attribute_assertion is None:
         return radiusd.RLM_MODULE_FAIL
 
     if _attribute_assertion is False:
-        log(radiusd.L_DBG, "IdP returned: %s" % HTTP.server.error_description)
+        logger.debug("IdP returned: %s" % CLIENT.server.error_description)
         return radiusd.RLM_MODULE_FAIL
 
     # remove the subject confirmation if there is one
@@ -276,10 +230,10 @@ def post_auth(authData):
     except KeyError:
         pass
 
-    log(radiusd.L_DBG, "Assertion: %s" % _attribute_assertion)
+    logger.debug("Assertion: %s" % _attribute_assertion)
 
     # Log the success
-    log(radiusd.L_DBG, 'user accepted: %s' % (userName, ))
+    logger.debug('user accepted: %s' % (userName, ))
 
     # We are adding to the RADIUS packet
     # We need to set an Auth-Type.
@@ -297,5 +251,4 @@ def post_auth(authData):
 # Test the modules
 if __name__ == '__main__':
     instantiate(None)
-    #    print authorize((('User-Name', '"map"'), ('User-Password', '"abc"')))
-    print post_auth((('User-Name', '"roland"'), ('User-Password', '"one"')))
+    print post_auth((('User-Name', '"roland"'), ('User-Password', '"dianakra"')))
