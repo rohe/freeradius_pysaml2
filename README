@@ -10,10 +10,10 @@ Dependency
 ----------
 
 This package is dependent on pySAML2.
-You should get PySAML2 from Launchpad, the version that is at PyPI is not
+You should get PySAML2 from github, the version that is at PyPI is not
 enough up-to-date.
 
-bzr co bzr+ssh://bazaar.launchpad.net/%2Bbranch/pysaml2/
+https://github.com/rohe/pysaml2
 
 should get you the latest version.
 
@@ -28,8 +28,8 @@ preferences.
 
 You can use one of the provided 'template/modules_python_aa' or
 'template/modules_python_ecp' files as they are. Which one depends of your
-choice of using ECP or AA. Rename of copy the one you want to use to
-'template/modules_python' and copy it to raddb/modules.
+choice of using ECP or AA. Rename or copy the ones you want to use from
+'template/modules_python' and move them to raddb/modules.
 
 Regarding the configuration of outer/inner tunnel this is still a bit
 undecided. The extension module can be use in either.
