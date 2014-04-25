@@ -21,3 +21,5 @@ PASSWD = ""
 # header. This defines the header name
 
 USERNAME_HEADER = "X-Moonshot-Username"
+
+USE_RADIUS_PASSWD=False
