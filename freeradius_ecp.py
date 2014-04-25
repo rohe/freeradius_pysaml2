@@ -4,6 +4,8 @@
 #
 # The freeradius extension using ECP
 #
+import base64
+
 __author__ = 'rolandh'
 __version__ = "0.0.5a"
 
@@ -19,8 +21,8 @@ from saml2.response import authn_response
 from saml2.ecp_client import Client
 
 # Where's the configuration file is
-CONFIG_DIR = "/usr/local/etc/moonshot"
-#CONFIG_DIR = "../etc"
+#CONFIG_DIR = "/usr/local/etc/moonshot"
+CONFIG_DIR = "./"
 sys.path.insert(0, CONFIG_DIR)
 
 import config
@@ -29,6 +31,7 @@ import config
 CLIENT = None
 ECP = None
 MAX_STRING_LENGTH = 247
+
 
 def eq_len_parts(txt, delta=250):
     res = []
@@ -39,6 +42,7 @@ def eq_len_parts(txt, delta=250):
         res.append("".join(txt[n:m]))
         n = m
     return res
+
 
 def exception_trace(tag, exc, log):
     message = traceback.format_exception(*sys.exc_info())
@@ -64,7 +68,9 @@ class LOG(object):
     def warning(self, txt):
         log(radiusd.L_ERR, txt) # Not absolutely correct just an approximation
 
+
 logger = LOG()
+
 
 #noinspection PyUnusedLocal
 def instantiate(p):
@@ -99,14 +105,20 @@ def instantiate(p):
             _certs = ""
             _disable = True
 
-        ECP = Client("", _passwd, None, metadata_file=config.METADATA_FILE,xmlsec_binary=CLIENT.config.xmlsec_binary,
+        ECP = Client("", _passwd, None, metadata_file=config.METADATA_FILE,
+                     xmlsec_binary=CLIENT.config.xmlsec_binary,
                      ca_certs=_certs,
-                     disable_ssl_certificate_validation=_disable, key_file=CLIENT.config.key_file)
+                     disable_ssl_certificate_validation=_disable,
+                     key_file=CLIENT.config.key_file)
         logger.info('ECP client initialized')
-        
+
     except Exception, err:
         exception_trace("instantiate", err, logger)
         return -1
+
+    if len(CLIENT.metadata.metadata) == len(ECP.metadata.metadata):
+        if not CLIENT.metadata.metadata.values()[0] == ECP.metadata.metadata.values()[0]:
+            logger.info("metadata differs between SP and ECP client")
 
     return 0
 
@@ -128,15 +140,12 @@ def authentication_request(cls, ecp, idp_entity_id, destination, sign=False):
                                 saml2.BINDING_PAOS)
     if not acsus:
         raise Exception("Couldn't find own SOAP endpoint")
-        
+
     acsu = acsus[0]
 
-    request = cls.create_authn_request(destination,
-                                service_url_binding=acsu,
-                                sign=sign,
-                                sign_prepare=True,
-                                binding=saml2.BINDING_PAOS,
-                                nameid_format=saml.NAMEID_FORMAT_PERSISTENT)
+    req_id, request = cls.create_authn_request(
+        destination, service_url_binding=acsu, sign=sign, sign_prepare=True,
+        binding=saml2.BINDING_PAOS, nameid_format=saml.NAMEID_FORMAT_PERSISTENT)
 
     try:
         try:
@@ -144,7 +153,11 @@ def authentication_request(cls, ecp, idp_entity_id, destination, sign=False):
         except AttributeError:
             headers = None
 
-        logger.info( "Headers: {0:>s}".format(headers))
+        if ecp.passwd:  # Set HTTP Basic authentication header
+            _str = base64.b64encode("%s:%s" % (ecp.user, ecp.passwd))
+            headers.append(("Authorization", "Basic %s" % _str))
+
+        logger.info("Headers: {0:>s}".format(headers))
 
         # send the request and receive the response
         response = ecp.phase2(request, acsu, idp_entity_id, headers,
@@ -199,7 +212,7 @@ def only_allowed_attributes(client, assertion, allowed):
     return assertion
 
 
-def post_auth(authData):
+def post_auth(authdata):
     """ Attribute aggregation after authentication
     This is the function that is accessible from the freeradius server core.
 
@@ -207,28 +220,33 @@ def post_auth(authData):
     """
 
     global CLIENT
-    global HTTP
     global ECP
 
     # Extract the data we need.
-    userName = None
-    serviceName = ""
-    hostName = ""
+    username = None
+    servicename = ""
+    hostname = ""
+    password = ""
 
-    for t in authData:
+    for t in authdata:
         if t[0] == 'User-Name':
-            userName = t[1][1:-1]
+            username = t[1][1:-1]
         elif t[0] == "GSS-Acceptor-Service-Name":
-            serviceName = t[1][1:-1]
+            servicename = t[1][1:-1]
         elif t[0] == "GSS-Acceptor-Host-Name":
-            hostName = t[1][1:-1]
+            hostname = t[1][1:-1]
+        elif t[0] == "User-Password":
+            password = t[1][1:-1]
 
-    _srv = "%s:%s" % (serviceName, hostName)
+    if password and config.USE_RADIUS_PASSWD:
+        ECP.passwd = password
+
+    _srv = "%s:%s" % (servicename, hostname)
     log(radiusd.L_DBG, "Working on behalf of: %s" % _srv)
 
     # Find the endpoint to use
-    sso_service = CLIENT.metadata.single_sign_on_service(config.IDP_ENTITYID,
-                                                         saml2.BINDING_SOAP)
+    sso_service = ECP.metadata.single_sign_on_service(config.IDP_ENTITYID,
+                                                      saml2.BINDING_SOAP)
     if not sso_service:
         log(radiusd.L_DBG,
             "Couldn't find an single-sign-on endpoint for: %s" % (
@@ -241,10 +259,10 @@ def post_auth(authData):
         log(radiusd.L_DBG, "location: %s" % location)
 
     #ECP.http.clear_credentials()
-    ECP.user = userName
+    ECP.user = username
     if config.DEBUG:
         log(radiusd.L_DBG, "Login using user:%s password:'%s'" % (ECP.user,
-                                                                 ECP.passwd))
+                                                                  ECP.passwd))
 
     _assertion = authentication_request(CLIENT, ECP,
                                         config.IDP_ENTITYID,
@@ -255,7 +273,7 @@ def post_auth(authData):
         return radiusd.RLM_MODULE_FAIL
 
     if _assertion is False:
-        log(radiusd.L_DBG, "IdP returned: %s" % HTTP.server.error_description)
+        log(radiusd.L_DBG, "IdP returned: %s" % CLIENT.server.error_description)
         return radiusd.RLM_MODULE_FAIL
 
     # remove the subject confirmation if there is one
@@ -265,7 +283,7 @@ def post_auth(authData):
         log(radiusd.L_DBG, "Assertion: %s" % _assertion)
 
     # Log the success
-    log(radiusd.L_DBG, 'user accepted: %s' % (userName, ))
+    log(radiusd.L_DBG, 'user accepted: %s' % (username, ))
 
     # We are adding to the RADIUS packet
     # We need to set an Auth-Type.
@@ -275,7 +293,7 @@ def post_auth(authData):
     #attr = "UKERNA-Attr-%d" % 132
     #attr = "Vendor-%d-Attr-%d" % (25622, 132)
     restup = (tuple([(attr, x) for x in
-                    eq_len_parts("%s" % _assertion, MAX_STRING_LENGTH)]))
+                     eq_len_parts("%s" % _assertion, MAX_STRING_LENGTH)]))
 
     return radiusd.RLM_MODULE_UPDATED, restup, None
 
@@ -284,5 +302,6 @@ def post_auth(authData):
 if __name__ == '__main__':
     instantiate(None)
     #    print authorize((('User-Name', '"map"'), ('User-Password', '"abc"')))
-    print post_auth((('User-Name', '"testing"'), ('User-Password', '"password"')))
+    print post_auth(
+        (('User-Name', '"upper"'), ('User-Password', '"crust"')))
   
